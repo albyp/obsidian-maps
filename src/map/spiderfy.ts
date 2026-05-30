@@ -18,6 +18,7 @@ export class SpiderfyManager {
 
 	private activeMarkers: MapMarker[] | null = null;
 	private activeCoordinates: [number, number] | null = null;
+	private armLengths: number[] = [];
 
 	private hideTimeout: number | null = null;
 	private hideTimeoutWin: Window | null = null;
@@ -50,6 +51,16 @@ export class SpiderfyManager {
 
 		this.cardEls = [];
 		this.lineEls = [];
+		this.armLengths = [];
+
+		const n = markers.length;
+		const mapW = this.mapEl.offsetWidth || 600;
+		const mapH = this.mapEl.offsetHeight || 400;
+		const maxRadius = Math.min(mapW, mapH) * 0.38;
+		// Minimum radius so adjacent cards (≈170px wide) don't overlap at their arc chord
+		const cardW = 170;
+		const geoMin = n <= 1 ? 80 : Math.ceil((cardW / 2) / Math.sin(Math.PI / n));
+		const baseRadius = Math.min(Math.max(90, geoMin), maxRadius);
 
 		for (const marker of markers) {
 			// SVG line (positions filled in by render())
@@ -67,6 +78,8 @@ export class SpiderfyManager {
 			cardEl.addEventListener('mouseenter', () => this.clearHideTimeout());
 			cardEl.addEventListener('mouseleave', () => this.hide());
 			this.cardEls.push(cardEl);
+
+			this.armLengths.push(baseRadius);
 		}
 
 		this.render();
@@ -115,6 +128,7 @@ export class SpiderfyManager {
 		this.cardsEl = null;
 		this.cardEls = [];
 		this.lineEls = [];
+		this.armLengths = [];
 		this.activeMarkers = null;
 		this.activeCoordinates = null;
 	}
@@ -122,19 +136,37 @@ export class SpiderfyManager {
 	private render(): void {
 		if (!this.map || !this.activeCoordinates || !this.activeMarkers) return;
 
-		const [lat, lng] = this.activeCoordinates;
-		const centerPx = this.map.project([lng, lat]);
 		const n = this.activeMarkers.length;
-		const radius = Math.max(90, 70 + n * 10);
+		const cardHalfW = 85;
+		const cardHalfH = 16;
+		const mapW = this.mapEl.offsetWidth || 600;
+		const mapH = this.mapEl.offsetHeight || 400;
+
+		// Project each marker to pixel space; derive centroid for card placement
+		const markerPixels = this.activeMarkers.map(m => {
+			const [lat, lng] = m.coordinates;
+			return this.map!.project([lng, lat]);
+		});
+		const centroid = markerPixels.reduce(
+			(acc, px) => ({ x: acc.x + px.x / n, y: acc.y + px.y / n }),
+			{ x: 0, y: 0 }
+		);
 
 		for (let i = 0; i < n; i++) {
 			const angle = -Math.PI / 2 + (2 * Math.PI / n) * i;
-			const cardX = centerPx.x + radius * Math.cos(angle);
-			const cardY = centerPx.y + radius * Math.sin(angle);
+			const arm = this.armLengths[i] ?? 100;
+			const rawX = centroid.x + arm * Math.cos(angle);
+			const rawY = centroid.y + arm * Math.sin(angle);
 
+			// Clamp so cards stay within the map viewport
+			const cardX = Math.max(cardHalfW, Math.min(mapW - cardHalfW, rawX));
+			const cardY = Math.max(cardHalfH, Math.min(mapH - cardHalfH, rawY));
+
+			// Line from this marker's own pixel position to its card
+			const markerPx = markerPixels[i];
 			const line = this.lineEls[i];
-			line.setAttribute('x1', String(centerPx.x));
-			line.setAttribute('y1', String(centerPx.y));
+			line.setAttribute('x1', String(markerPx.x));
+			line.setAttribute('y1', String(markerPx.y));
 			line.setAttribute('x2', String(cardX));
 			line.setAttribute('y2', String(cardY));
 
