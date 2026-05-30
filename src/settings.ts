@@ -10,10 +10,14 @@ export interface TileSet {
 
 export interface MapSettings {
 	tileSets: TileSet[];
+	interactivePopups: boolean;
+	popupCloseDelay: number;
 }
 
 export const DEFAULT_SETTINGS: MapSettings = {
 	tileSets: [],
+	interactivePopups: false,
+	popupCloseDelay: 300,
 };
 
 class TileSetModal extends Modal {
@@ -132,6 +136,34 @@ export class MapSettingTab extends PluginSettingTab {
 				text: 'Add background sets available to all maps.'
 			});
 		}
+
+		new Setting(containerEl)
+			.setHeading()
+			.setName('Popups');
+
+		new Setting(containerEl)
+			.setName('Interactive popups')
+			.setDesc('Keep popups open long enough to follow links and read content.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.interactivePopups)
+				.onChange(async value => {
+					this.plugin.settings.interactivePopups = value;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName('Close delay (ms)')
+			.setDesc('How long to wait before closing the popup after the cursor leaves. Only applies when interactive popups is enabled.')
+			.addSlider(slider => slider
+				.setLimits(0, 5000, 50)
+				.setValue(this.plugin.settings.popupCloseDelay)
+				.setDynamicTooltip()
+				.onChange(async value => {
+					this.plugin.settings.popupCloseDelay = value;
+					await this.plugin.saveSettings();
+				})
+			);
 	}
 
 	private displayTileSetItem(containerEl: HTMLElement, tileSet: TileSet, index: number): void {
