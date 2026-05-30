@@ -1,5 +1,6 @@
 import { App, BasesEntry, BasesPropertyId, ListValue, Value } from 'obsidian';
 import { Popup, Map } from 'maplibre-gl';
+import { MapSettings } from '../settings';
 
 export class PopupManager {
 	private map: Map | null = null;
@@ -8,10 +9,12 @@ export class PopupManager {
 	private popupHideTimeoutWin: Window | null = null;
 	private containerEl: HTMLElement;
 	private app: App;
+	private getSettings: () => MapSettings;
 
-	constructor(containerEl: HTMLElement, app: App) {
+	constructor(containerEl: HTMLElement, app: App, getSettings: () => MapSettings) {
 		this.containerEl = containerEl;
 		this.app = app;
+		this.getSettings = getSettings;
 	}
 
 	setMap(map: Map | null): void {
@@ -70,6 +73,9 @@ export class PopupManager {
 	hidePopup(): void {
 		this.clearPopupHideTimeout();
 
+		const settings = this.getSettings();
+		const delay = settings.interactivePopups ? settings.popupCloseDelay : 150;
+
 		const win = this.popupHideTimeoutWin = this.containerEl.win;
 		this.popupHideTimeout = win.setTimeout(() => {
 			if (this.sharedPopup) {
@@ -77,7 +83,7 @@ export class PopupManager {
 			}
 			this.popupHideTimeout = null;
 			this.popupHideTimeoutWin = null;
-		}, 150); // Small delay to allow moving to popup
+		}, delay);
 	}
 
 	clearPopupHideTimeout(): void {
