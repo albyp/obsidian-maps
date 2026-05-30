@@ -8,33 +8,130 @@ Goal: Extend the plugin to better support journal with images, property, GIS, su
 
 The long-term intention is to contribute improvements back to the original repository through pull requests where appropriate.
 
-Primary focus areas:
-
-1. Persistent map popups
-2. Interactive popup cards
-3. Multiple notes at identical coordinates
-4. Image-first markers
-5. Rich property/media card layouts
-6. Improved UX for dense spatial datasets
-
 ---
 
 ## Existing Stack
 
-The plugin currently uses:
+- Obsidian Plugin API
+- TypeScript
+- MapLibre GL JS
+- esbuild for bundling (`npm run build` → `main.js` + `styles.css`)
+- Plugin folder: `.obsidian/plugins/obsidian-maps/` in vault
 
-* Obsidian Plugin API
-* TypeScript
-* MapLibre GL JS
-* Existing Obsidian Maps data models and marker rendering
+---
 
-Before making changes:
+## Architecture
 
-* Understand plugin architecture
-* Understand popup lifecycle
-* Understand marker creation workflow
-* Understand note metadata rendering
-* Identify where markers and popups are created
+### Key files
+
+| File | Role |
+| --- | --- |
+| `src/main.ts` | Plugin entry, settings load/save |
+| `src/map-view.ts` | `MapView` class, initialises all managers |
+| `src/settings.ts` | `MapSettings` interface, defaults, settings UI tab |
+| `src/map/popup.ts` | `PopupManager` — single-entry and multi-entry list popups |
+| `src/map/spiderfy.ts` | `SpiderfyManager` — graph spiderfy overlay |
+| `src/map/markers.ts` | `MarkerManager` — GeoJSON features, icon compositing, event handlers |
+| `src/map/types.ts` | `MapMarker`, `MapMarkerProperties` interfaces |
+| `src/map/utils.ts` | `coordinateFromValue`, `parseCoordinate` |
+| `styles.css` | All plugin CSS |
+
+### Manager lifecycle (map-view.ts)
+
+```text
+MapView constructor
+  → new PopupManager(containerEl, app, () => settings)
+  → new SpiderfyManager(mapEl, app, () => settings)
+  → new MarkerManager(app, mapEl, popupManager, spiderfyManager, () => settings, ...)
+
+map.on('load')
+  → popupManager.setMap(map)
+  → spiderfyManager.setMap(map)
+  → markerManager.setMap(map)
+
+destroyMap()
+  → popupManager.destroy()
+  → spiderfyManager.destroy()
+  → map.remove()
+  → markerManager.setMap(null)
+  → spiderfyManager.setMap(null)
+```
+
+### Marker rendering
+
+Markers are GeoJSON symbol features on the `marker-pins` layer. Each feature stores `entryIndex` (index into `MarkerManager.markers[]`) and a composite icon key. Icons are canvas-composited circles with optional Lucide icons.
+
+### Popup lifecycle
+
+- Shared single `maplibregl.Popup` instance, lazily created
+- `showPopup(markers[], coordinates, ...)` — single entry → `createPopupContent()`, multiple → `createMultiEntryContent()`
+- `hidePopup()` uses configurable delay (`popupCloseDelay`) when `interactivePopups` is on, else 150 ms
+- Popup element has mouseenter/mouseleave handlers to cancel/restart the hide timeout
+
+### Spiderfy lifecycle
+
+- On hover of a cluster, `getNearbyMarkers(point)` queries rendered features within a 60×60 px bbox
+- `SpiderfyManager.show(markers, coordinates)` creates an SVG overlay (lines) and a div overlay (cards) inside `mapEl`
+- Cards are positioned using `map.project([lng, lat])` and repositioned on `map.on('move')` / `map.on('zoom')`
+- Cards have mouseenter/mouseleave to cancel/restart the hide timeout
+- `tearDown()` removes SVG and cards and deregisters move/zoom listeners
+
+---
+
+## Current Settings (`MapSettings`)
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `tileSets` | `TileSet[]` | `[]` | Custom map backgrounds |
+| `interactivePopups` | `boolean` | `false` | Use configurable close delay |
+| `popupCloseDelay` | `number` | `300` | ms before popup/spiderfy closes |
+| `multiNoteDisplay` | `'list' \| 'spiderfy'` | `'list'` | How to show clustered notes |
+
+---
+
+## Completed Work
+
+### PR 1 — Interactive / Persistent Popups ✓
+
+- Added `interactivePopups` toggle and `popupCloseDelay` slider to settings UI
+- `PopupManager` accepts a `getSettings` getter; `hidePopup()` uses configurable delay
+- Existing hover-persistence mechanism (mouseenter on popup cancels hide timeout) unchanged
+
+### PR 2 — Multiple Notes at Same Coordinates ✓
+
+- `showPopup()` signature changed from single `BasesEntry` to `MapMarker[]`
+- Single marker → `createPopupContent()` (unchanged UX)
+- Multiple markers → `createMultiEntryContent()`: header "N notes at this location" + compact title-only links per entry (no images in list)
+- Multi-entry popup has `max-height: 60vh; overflow-y: auto`
+
+### PR 3 — Graph Spiderfy ✓ (just implemented, not yet tested)
+
+- New `src/map/spiderfy.ts` — `SpiderfyManager`
+- `getNearbyMarkers(point)` replaces `getMarkersAtCoordinates` — uses `queryRenderedFeatures` with 60×60 px bbox, covers both identical-coordinate stacks and nearby markers
+- Settings toggle: `multiNoteDisplay: 'list' | 'spiderfy'`
+- Spiderfy: SVG lines radiate from marker to floating mini-cards; cards reposition on pan/zoom
+- Card label uses `entry.file.basename` (safe — never renders as an image)
+
+---
+
+## Remaining Work
+
+### Next: Rich Image Cards (single-note popup)
+
+Enhance `createPopupContent()` in `popup.ts` to detect image frontmatter fields (`img`, `image`, `thumbnail`, `cover`) and render a card layout:
+
+```text
+[Image — max 100% wide, max 200px tall, object-fit: cover]
+Title (link)
+label  value
+label  value
+```
+
+Gracefully degrade if no image field exists.
+
+### Later: Image Markers
+
+Allow markers to render a thumbnail from frontmatter instead of the default circle pin. Must stay performant — needs a clustering or lazy-load strategy.
 
 ---
 
@@ -42,320 +139,42 @@ Before making changes:
 
 ### Preserve Existing Behaviour
 
-All new functionality should:
-
-* Be optional
-* Be configurable
-* Default to current behaviour unless there is a compelling reason otherwise
-
-Avoid breaking existing users.
-
----
+All new functionality should be optional, configurable, and default to current behaviour.
 
 ### Small Incremental Changes
 
-Prefer:
-
-* Small PR-sized improvements
-* Feature flags
-* Settings toggles
-
-Avoid:
-
-* Large architectural rewrites
-* Unnecessary refactors
-
----
-
-## Feature 1: Persistent Popups
-
-### Current Behaviour
-
-Current workflow appears to be:
-
-mouseenter -> create popup
-
-mouseleave -> destroy popup
-
-This makes image previews and interactive content difficult to use.
-
-### Desired Behaviour
-
-Configurable popup persistence.
-
-Example:
-
-mouseenter -> show popup
-
-mouseleave -> start timeout
-
-popup hover -> cancel timeout
-
-popup leave -> hide popup
-
-### Settings
-
-Add settings such as:
-
-* Enable interactive popups
-* Popup close delay (ms)
-* Open popup on hover
-* Open popup on click
-* Popup automatically open
-* Marker as image
-
-### Success Criteria
-
-Users can:
-
-* Move cursor onto popup
-* Interact with links
-* View images
-* Read content without popup disappearing
-
----
-
-## Feature 2: Multiple Notes At Same Coordinates
-
-### Problem
-
-Many notes may share identical coordinates.
-
-Examples:
-
-* Property sales
-* Apartment complexes
-* Survey control points
-* Multiple observations
-
-Currently markers overlap.
-
-### Investigate Existing Behaviour
-
-Determine:
-
-* Whether markers are de-duplicated
-* Whether only one marker is rendered
-* Whether multiple markers exist but overlap
-
-### Desired Behaviour
-
-Support one or more of:
-
-#### Option A
-
-Stacked popup list
-
-Example:
-
-Location
-
-* Note A
-* Note B
-* Note C
-
-#### Option B
-
-Spiderfy behaviour
-
-One marker expands into multiple markers.
-
-#### Option C
-
-Carousel view
-
-Users can cycle through notes.
-
-### Preferred Initial Solution
-
-Stacked popup list.
-
-This is simpler and aligns well with Obsidian workflows.
-
----
-
-## Feature 3: Rich Image Cards
-
-### Current Goal
-
-Support image-rich note previews.
-
-Many notes contain:
-
-* img
-* image
-* thumbnail
-* cover
-
-frontmatter fields.
-
-### Desired Behaviour
-
-Popup card displays:
-
-* Image
-* Title
-* Summary
-* Tags
-* Metadata
-
-Example card layout:
-
----
-
-[Image]
-
-Property Name
-
-Location
-
-Metadata
-
----
-
-### Requirements
-
-Cards should gracefully degrade if no image exists.
-
----
-
-## Feature 4: Image Markers
-
-### Stretch Goal
-
-Allow markers to render thumbnails.
-
-Examples:
-
-Circular image markers
-
-or
-
-Small property-card markers
-
-instead of standard pins.
-
-### Requirements
-
-Must remain performant.
-
-Need clustering strategy if implemented.
-
----
-
-## Feature 5: Popup Architecture
-
-Investigate replacing direct popup ownership.
-
-Current:
-
-Marker -> Popup
-
-Potential future:
-
-Marker -> Popup Manager
-
-Benefits:
-
-* Reusable popups
-* Multiple popup types
-* Pinned popups
-* Better lifecycle management
-
-Do not implement unless necessary.
-
----
-
-## Areas To Investigate
-
-Search codebase for:
-
-popup
-
-Popup
-
-mouseenter
-
-mouseleave
-
-mouseover
-
-mouseout
-
-Marker
-
-MapLibre
-
-maplibregl.Popup
-
-maplibregl.Marker
-
-Understand existing lifecycle before making changes.
-
----
-
-## UX Inspiration
-
-Research patterns from:
-
-Airbnb
-
-Zillow
-
-Google Maps
-
-Mapbox examples
-
-PhotoPrism
-
-Focus on:
-
-* Image-first markers
-* Interactive cards
-* Hover persistence
-* Dense datasets
-* Cluster expansion
+Prefer small PR-sized improvements and settings toggles. Avoid large architectural rewrites.
 
 ---
 
 ## Coding Standards
 
-* TypeScript only
-* Keep functions small
-* Add comments where behaviour is non-obvious
-* Prefer composition over duplication
-* Preserve upstream style
+- TypeScript only
+- Keep functions small
+- Comment only non-obvious behaviour (not what, only why)
+- Prefer composition over duplication
+- Preserve upstream style
 
 ---
 
 ## Pull Request Strategy
 
-Target separate PRs:
-
-PR 1
-Interactive popup behaviour
-
-PR 2
-Multiple notes at identical coordinates
-
-PR 3
-Rich image cards
-
-PR 4
-Image markers
+| PR | Feature | Status |
+| --- | --- | --- |
+| PR 1 | Interactive popup behaviour | Done ✓ |
+| PR 2 | Multiple notes at identical coordinates | Done ✓ |
+| PR 3 | Graph spiderfy for nearby/stacked markers | Implemented, needs test |
+| PR 4 | Rich image cards (single-note popup) | Next |
+| PR 5 | Image markers | Later |
 
 Keep each PR independently mergeable.
 
 ---
 
-## Deliverables
+## Build & Deploy
 
-For each completed feature:
+```bash
+npm run build          # compiles src/ → main.js + styles.css
+```
 
-1. Code implementation
-2. Settings UI
-3. Documentation updates
-4. Screenshots
-5. Migration notes if required
-
-Always explain architectural decisions before making large changes.
+Copy `main.js` and `styles.css` to `.obsidian/plugins/obsidian-maps/` in your vault, then disable/re-enable the plugin in Obsidian settings (or Ctrl+R to fully restart).
