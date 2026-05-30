@@ -16,6 +16,7 @@ import { CustomZoomControl } from './map/controls/zoom-control';
 import { BackgroundSwitcherControl } from './map/controls/background-switcher';
 import { StyleManager } from './map/style';
 import { PopupManager } from './map/popup';
+import { SpiderfyManager } from './map/spiderfy';
 import { MarkerManager } from './map/markers';
 import { hasOwnProperty, coordinateFromValue } from './map/utils';
 import { rtlPluginCode } from './map/rtl-plugin-code';
@@ -54,6 +55,7 @@ export class MapView extends BasesView {
 	// Managers
 	private styleManager: StyleManager;
 	private popupManager: PopupManager;
+	private spiderfyManager: SpiderfyManager;
 	private markerManager: MarkerManager;
 
 	// Static flag to track RTL plugin initialization
@@ -69,10 +71,13 @@ export class MapView extends BasesView {
 		// Initialize managers
 		this.styleManager = new StyleManager(this.app);
 		this.popupManager = new PopupManager(this.containerEl, this.app, () => this.plugin.settings);
+		this.spiderfyManager = new SpiderfyManager(this.mapEl, this.app, () => this.plugin.settings);
 		this.markerManager = new MarkerManager(
 			this.app,
 			this.mapEl,
 			this.popupManager,
+			this.spiderfyManager,
+			() => this.plugin.settings,
 			(path, newLeaf) => void this.app.workspace.openLinkText(path, '', newLeaf),
 			() => this.data,
 			() => this.mapConfig,
@@ -206,6 +211,7 @@ export class MapView extends BasesView {
 
 		// Set map reference in managers
 		this.popupManager.setMap(this.map);
+		this.spiderfyManager.setMap(this.map);
 		this.markerManager.setMap(this.map);
 
 		this.map.addControl(new CustomZoomControl(), 'top-right');
@@ -275,11 +281,13 @@ export class MapView extends BasesView {
 
 	private destroyMap(): void {
 		this.popupManager.destroy();
+		this.spiderfyManager.destroy();
 		if (this.map) {
 			this.map.remove();
 			this.map = null;
 		}
 		this.markerManager.setMap(null);
+		this.spiderfyManager.setMap(null);
 	}
 
 	public onDataUpdated(): void {
