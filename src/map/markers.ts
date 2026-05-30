@@ -1,8 +1,10 @@
 import { App, BasesEntry, BasesPropertyId, Keymap, Menu, setIcon } from 'obsidian';
-import { Map, LngLatBounds, GeoJSONSource, MapLayerMouseEvent } from 'maplibre-gl';
+import { Map, LngLatBounds, GeoJSONSource, MapLayerMouseEvent, Point, PointLike } from 'maplibre-gl';
 import { MapMarker, MapMarkerProperties } from './types';
 import { coordinateFromValue } from './utils';
 import { PopupManager } from './popup';
+import { SpiderfyManager } from './spiderfy';
+import { MapSettings } from '../settings';
 
 export class MarkerManager {
 	private map: Map | null = null;
@@ -12,6 +14,8 @@ export class MarkerManager {
 	private bounds: LngLatBounds | null = null;
 	private loadedIcons: Set<string> = new Set();
 	private popupManager: PopupManager;
+	private spiderfyManager: SpiderfyManager;
+	private getSettings: () => MapSettings;
 	private onOpenFile: (path: string, newLeaf: boolean) => void;
 	private getData: () => any;
 	private getMapConfig: () => any;
@@ -21,6 +25,8 @@ export class MarkerManager {
 		app: App,
 		mapEl: HTMLElement,
 		popupManager: PopupManager,
+		spiderfyManager: SpiderfyManager,
+		getSettings: () => MapSettings,
 		onOpenFile: (path: string, newLeaf: boolean) => void,
 		getData: () => any,
 		getMapConfig: () => any,
@@ -29,6 +35,8 @@ export class MarkerManager {
 		this.app = app;
 		this.mapEl = mapEl;
 		this.popupManager = popupManager;
+		this.spiderfyManager = spiderfyManager;
+		this.getSettings = getSettings;
 		this.onOpenFile = onOpenFile;
 		this.getData = getData;
 		this.getMapConfig = getMapConfig;
@@ -376,7 +384,7 @@ export class MarkerManager {
 			if (this.map) this.map.getCanvas().style.cursor = '';
 		});
 
-		// Handle hover to show popup
+		// Handle hover to show popup or spiderfy
 		this.map.on('mouseenter', 'marker-pins', (e: MapLayerMouseEvent) => {
 			if (!e.features || e.features.length === 0) return;
 			const feature = e.features[0];
@@ -386,33 +394,71 @@ export class MarkerManager {
 				const data = this.getData();
 				const mapConfig = this.getMapConfig();
 				if (data && data.properties && mapConfig) {
-					this.popupManager.showPopup(
-						markerData.entry,
-						markerData.coordinates,
-						data.properties,
-						mapConfig.coordinatesProp,
-						mapConfig.markerIconProp,
-						mapConfig.markerColorProp,
-						this.getDisplayName
-					);
+					const nearby = this.getNearbyMarkers(e.point);
+					if (nearby.length <= 1) {
+						this.spiderfyManager.clearHideTimeout();
+						this.popupManager.showPopup(
+							[markerData],
+							markerData.coordinates,
+							data.properties,
+							mapConfig.coordinatesProp,
+							mapConfig.markerIconProp,
+							mapConfig.markerColorProp,
+							this.getDisplayName
+						);
+					} else if (this.getSettings().multiNoteDisplay === 'spiderfy') {
+						this.popupManager.destroy();
+						this.spiderfyManager.show(nearby, markerData.coordinates);
+					} else {
+						this.spiderfyManager.destroy();
+						this.popupManager.showPopup(
+							nearby,
+							markerData.coordinates,
+							data.properties,
+							mapConfig.coordinatesProp,
+							mapConfig.markerIconProp,
+							mapConfig.markerColorProp,
+							this.getDisplayName
+						);
+					}
 				}
 			}
 		});
 
-		// Handle mouseleave to hide popup
+		// Handle mouseleave to hide popup and spiderfy
 		this.map.on('mouseleave', 'marker-pins', () => {
 			this.popupManager.hidePopup();
+			this.spiderfyManager.hide();
 		});
 
-		// Handle click to open file
+		// Handle click: open file for single marker, or show multi-note UI
 		this.map.on('click', 'marker-pins', (e: MapLayerMouseEvent) => {
 			if (!e.features || e.features.length === 0) return;
 			const feature = e.features[0];
 			const entryIndex = feature.properties?.entryIndex;
 			if (entryIndex !== undefined && this.markers[entryIndex]) {
 				const markerData = this.markers[entryIndex];
-				const newLeaf = e.originalEvent ? Boolean(Keymap.isModEvent(e.originalEvent)) : false;
-				this.onOpenFile(markerData.entry.file.path, newLeaf);
+				const nearby = this.getNearbyMarkers(e.point);
+				if (nearby.length <= 1) {
+					const newLeaf = e.originalEvent ? Boolean(Keymap.isModEvent(e.originalEvent)) : false;
+					this.onOpenFile(markerData.entry.file.path, newLeaf);
+				} else if (this.getSettings().multiNoteDisplay === 'spiderfy') {
+					this.spiderfyManager.show(nearby, markerData.coordinates);
+				} else {
+					const data = this.getData();
+					const mapConfig = this.getMapConfig();
+					if (data && data.properties && mapConfig) {
+						this.popupManager.showPopup(
+							nearby,
+							markerData.coordinates,
+							data.properties,
+							mapConfig.coordinatesProp,
+							mapConfig.markerIconProp,
+							mapConfig.markerColorProp,
+							this.getDisplayName
+						);
+					}
+				}
 			}
 		});
 
@@ -466,6 +512,24 @@ export class MarkerManager {
 				});
 			}
 		});
+	}
+
+	private getNearbyMarkers(point: Point): MapMarker[] {
+		const bbox: [PointLike, PointLike] = [
+			[point.x - 30, point.y - 30],
+			[point.x + 30, point.y + 30],
+		];
+		const features = this.map?.queryRenderedFeatures(bbox, { layers: ['marker-pins'] }) ?? [];
+		const seen = new Set<number>();
+		const result: MapMarker[] = [];
+		for (const f of features) {
+			const idx = f.properties?.entryIndex;
+			if (idx !== undefined && !seen.has(idx) && this.markers[idx]) {
+				seen.add(idx);
+				result.push(this.markers[idx]);
+			}
+		}
+		return result;
 	}
 }
 

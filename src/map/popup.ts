@@ -1,6 +1,7 @@
 import { App, BasesEntry, BasesPropertyId, ListValue, Value } from 'obsidian';
 import { Popup, Map } from 'maplibre-gl';
 import { MapSettings } from '../settings';
+import { MapMarker } from './types';
 
 export class PopupManager {
 	private map: Map | null = null;
@@ -22,7 +23,7 @@ export class PopupManager {
 	}
 
 	showPopup(
-		entry: BasesEntry,
+		markers: MapMarker[],
 		coordinates: [number, number],
 		properties: BasesPropertyId[],
 		coordinatesProp: BasesPropertyId | null,
@@ -30,10 +31,10 @@ export class PopupManager {
 		markerColorProp: BasesPropertyId | null,
 		getDisplayName: (prop: BasesPropertyId) => string
 	): void {
-		if (!this.map) return;
+		if (!this.map || markers.length === 0) return;
 
-		// Only show popup if there are properties to display
-		if (!properties || properties.length === 0 || !this.hasAnyPropertyValues(entry, properties, coordinatesProp, markerIconProp, markerColorProp)) {
+		// Only show popup if at least one marker has properties to display
+		if (!properties || properties.length === 0 || !markers.some(m => this.hasAnyPropertyValues(m.entry, properties, coordinatesProp, markerIconProp, markerColorProp))) {
 			return;
 		}
 
@@ -63,7 +64,9 @@ export class PopupManager {
 
 		// Update popup content and position
 		const [lat, lng] = coordinates;
-		const popupContent = this.createPopupContent(entry, properties, coordinatesProp, markerIconProp, markerColorProp, getDisplayName);
+		const popupContent = markers.length === 1
+			? this.createPopupContent(markers[0].entry, properties, coordinatesProp, markerIconProp, markerColorProp, getDisplayName)
+			: this.createMultiEntryContent(markers, properties, coordinatesProp, markerIconProp, markerColorProp, getDisplayName);
 		this.sharedPopup
 			.setDOMContent(popupContent)
 			.setLngLat([lng, lat])
@@ -158,6 +161,52 @@ export class PopupManager {
 					value.renderTo(valueEl, this.app.renderContext);
 				}
 			}
+		}
+
+		return containerEl;
+	}
+
+	private createMultiEntryContent(
+		markers: MapMarker[],
+		properties: BasesPropertyId[],
+		coordinatesProp: BasesPropertyId | null,
+		markerIconProp: BasesPropertyId | null,
+		markerColorProp: BasesPropertyId | null,
+		getDisplayName: (prop: BasesPropertyId) => string
+	): HTMLElement {
+		const containerEl = createDiv('bases-map-popup bases-map-popup--multi');
+
+		const headerEl = containerEl.createDiv('bases-map-popup-header');
+		headerEl.textContent = `${markers.length} notes at this location`;
+
+		const propertiesSlice = properties.slice(0, 20);
+
+		for (const marker of markers) {
+			// Find the first displayable text property to use as the entry title
+			let titleValue: Value | null = null;
+			for (const prop of propertiesSlice) {
+				if (prop === coordinatesProp || prop === markerIconProp || prop === markerColorProp) continue;
+				try {
+					const value = marker.entry.getValue(prop);
+					if (value && this.hasNonEmptyValue(value)) {
+						titleValue = value;
+						break;
+					}
+				} catch {
+					// skip unrenderable properties
+				}
+			}
+
+			if (!titleValue) continue;
+
+			// Render each entry as a compact title-only link — no images or property rows
+			const entryEl = containerEl.createDiv('bases-map-popup-entry');
+			const titleEl = entryEl.createDiv('bases-map-popup-title');
+			const titleLinkEl = titleEl.createEl('a', {
+				href: marker.entry.file.path,
+				cls: 'internal-link'
+			});
+			titleValue.renderTo(titleLinkEl, this.app.renderContext);
 		}
 
 		return containerEl;
