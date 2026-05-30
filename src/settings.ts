@@ -12,12 +12,14 @@ export interface MapSettings {
 	tileSets: TileSet[];
 	interactivePopups: boolean;
 	popupCloseDelay: number;
+	multiNoteDisplay: 'list' | 'spiderfy';
 }
 
 export const DEFAULT_SETTINGS: MapSettings = {
 	tileSets: [],
 	interactivePopups: false,
 	popupCloseDelay: 300,
+	multiNoteDisplay: 'list',
 };
 
 class TileSetModal extends Modal {
@@ -161,6 +163,19 @@ export class MapSettingTab extends PluginSettingTab {
 				.setDynamicTooltip()
 				.onChange(async value => {
 					this.plugin.settings.popupCloseDelay = value;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName('Multiple notes')
+			.setDesc('How to display multiple notes that share a location or are close together on screen.')
+			.addDropdown(dropdown => dropdown
+				.addOption('list', 'Stacked list')
+				.addOption('spiderfy', 'Graph spiderfy')
+				.setValue(this.plugin.settings.multiNoteDisplay)
+				.onChange(async (value: 'list' | 'spiderfy') => {
+					this.plugin.settings.multiNoteDisplay = value;
 					await this.plugin.saveSettings();
 				})
 			);
