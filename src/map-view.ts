@@ -68,7 +68,7 @@ export class MapView extends BasesView {
 
 		// Initialize managers
 		this.styleManager = new StyleManager(this.app);
-		this.popupManager = new PopupManager(this.containerEl, this.app);
+		this.popupManager = new PopupManager(this.containerEl, this.app, () => this.plugin.settings);
 		this.markerManager = new MarkerManager(
 			this.app,
 			this.mapEl,
