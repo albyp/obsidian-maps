@@ -173,31 +173,34 @@ export class MarkerManager {
 	private async loadCustomIcons(markers: MapMarker[]): Promise<void> {
 		if (!this.map) return;
 
-		// Collect all unique icon+color combinations that need to be loaded
-		const compositeImagesToLoad: Array<{ icon: string | null; color: string }> = [];
+		// Overlap count per coordinate — included in composite key so stacked markers get a badge
+		const coordCount: Record<string, number> = {};
+		for (const m of markers) {
+			const key = `${m.coordinates[0]},${m.coordinates[1]}`;
+			coordCount[key] = (coordCount[key] ?? 0) + 1;
+		}
+
+		const compositeImagesToLoad: Array<{ icon: string | null; color: string; count: number }> = [];
 		const uniqueKeys = new Set<string>();
 
 		for (const markerData of markers) {
 			const icon = this.getCustomIcon(markerData.entry);
 			const color = this.getCustomColor(markerData.entry) || 'var(--bases-map-marker-background)';
-			const compositeKey = this.getCompositeImageKey(icon, color);
+			const count = coordCount[`${markerData.coordinates[0]},${markerData.coordinates[1]}`] ?? 1;
+			const compositeKey = this.getCompositeImageKey(icon, color, count);
 
-			if (!this.loadedIcons.has(compositeKey)) {
-				if (!uniqueKeys.has(compositeKey)) {
-					compositeImagesToLoad.push({ icon, color });
-					uniqueKeys.add(compositeKey);
-				}
+			if (!this.loadedIcons.has(compositeKey) && !uniqueKeys.has(compositeKey)) {
+				compositeImagesToLoad.push({ icon, color, count });
+				uniqueKeys.add(compositeKey);
 			}
 		}
 
-		// Create composite images for each unique icon+color combination
-		for (const { icon, color } of compositeImagesToLoad) {
+		for (const { icon, color, count } of compositeImagesToLoad) {
 			try {
-				const compositeKey = this.getCompositeImageKey(icon, color);
-				const img = await this.createCompositeMarkerImage(icon, color);
+				const compositeKey = this.getCompositeImageKey(icon, color, count);
+				const img = await this.createCompositeMarkerImage(icon, color, count);
 
 				if (this.map) {
-					// Force update of the image on theme change
 					if (this.map.hasImage(compositeKey)) {
 						this.map.removeImage(compositeKey);
 					}
@@ -210,8 +213,9 @@ export class MarkerManager {
 		}
 	}
 
-	private getCompositeImageKey(icon: string | null, color: string): string {
-		return `marker-${icon || 'dot'}-${color.replace(/[^a-zA-Z0-9]/g, '')}`;
+	private getCompositeImageKey(icon: string | null, color: string, count: number = 1): string {
+		const suffix = count > 1 ? `_x${count}` : '';
+		return `marker-${icon || 'dot'}-${color.replace(/[^a-zA-Z0-9]/g, '')}${suffix}`;
 	}
 
 	private resolveColor(color: string): string {
@@ -230,7 +234,7 @@ export class MarkerManager {
 		return computedColor;
 	}
 
-	private async createCompositeMarkerImage(icon: string | null, color: string): Promise<HTMLImageElement> {
+	private async createCompositeMarkerImage(icon: string | null, color: string, count: number = 1): Promise<HTMLImageElement> {
 		// Resolve CSS variables to actual color values
 		const resolvedColor = this.resolveColor(color);
 		const resolvedIconColor = this.resolveColor('var(--bases-map-marker-icon-color)');
@@ -307,6 +311,24 @@ export class MarkerManager {
 			ctx.fill();
 		}
 
+		// Count badge — small circle in the top-right quadrant of the pin
+		if (count > 1) {
+			const badgeR = 5.5 * scale;
+			const badgeCX = centerX + radius * 0.65;
+			const badgeCY = centerY - radius * 0.65;
+
+			ctx.fillStyle = this.resolveColor('var(--color-red)') || '#e74c3c';
+			ctx.beginPath();
+			ctx.arc(badgeCX, badgeCY, badgeR, 0, 2 * Math.PI);
+			ctx.fill();
+
+			ctx.fillStyle = '#ffffff';
+			ctx.font = `bold ${Math.round(6 * scale)}px sans-serif`;
+			ctx.textAlign = 'center';
+			ctx.textBaseline = 'middle';
+			ctx.fillText(String(count), badgeCX, badgeCY);
+		}
+
 		// Convert canvas to image
 		return new Promise((resolve, reject) => {
 			canvas.toBlob((blob) => {
@@ -324,15 +346,22 @@ export class MarkerManager {
 	}
 
 	private createGeoJSONFeatures(markers: MapMarker[]): GeoJSON.Feature[] {
+		const coordCount: Record<string, number> = {};
+		for (const m of markers) {
+			const key = `${m.coordinates[0]},${m.coordinates[1]}`;
+			coordCount[key] = (coordCount[key] ?? 0) + 1;
+		}
+
 		return markers.map((markerData, index) => {
 			const [lat, lng] = markerData.coordinates;
 			const icon = this.getCustomIcon(markerData.entry);
 			const color = this.getCustomColor(markerData.entry) || 'var(--bases-map-marker-background)';
-			const compositeKey = this.getCompositeImageKey(icon, color);
+			const count = coordCount[`${lat},${lng}`] ?? 1;
+			const compositeKey = this.getCompositeImageKey(icon, color, count);
 
 			const properties: MapMarkerProperties = {
 				entryIndex: index,
-				icon: compositeKey, // Use composite image key
+				icon: compositeKey,
 			};
 
 			return {
@@ -349,7 +378,6 @@ export class MarkerManager {
 	private addMarkerLayers(): void {
 		if (!this.map) return;
 
-		// Add a single symbol layer for composite marker images
 		this.map.addLayer({
 			id: 'marker-pins',
 			type: 'symbol',
@@ -360,9 +388,9 @@ export class MarkerManager {
 					'interpolate',
 					['linear'],
 					['zoom'],
-					0, 0.12,   // Very small
+					0, 0.12,
 					4, 0.18,
-					14, 0.22,  // Normal size
+					14, 0.22,
 					18, 0.24
 				],
 				'icon-allow-overlap': true,
@@ -370,6 +398,7 @@ export class MarkerManager {
 				'icon-padding': 0,
 			},
 		});
+
 	}
 
 	private setupMarkerInteractions(): void {
@@ -408,7 +437,7 @@ export class MarkerManager {
 						);
 					} else if (this.getSettings().multiNoteDisplay === 'spiderfy') {
 						this.popupManager.destroy();
-						this.spiderfyManager.show(nearby, markerData.coordinates);
+						this.spiderfyManager.show(nearby, markerData.coordinates, mapConfig.spiderfyImageProp);
 					} else {
 						this.spiderfyManager.destroy();
 						this.popupManager.showPopup(
@@ -439,14 +468,14 @@ export class MarkerManager {
 			if (entryIndex !== undefined && this.markers[entryIndex]) {
 				const markerData = this.markers[entryIndex];
 				const nearby = this.getNearbyMarkers(e.point);
+				const mapConfig = this.getMapConfig();
 				if (nearby.length <= 1) {
 					const newLeaf = e.originalEvent ? Boolean(Keymap.isModEvent(e.originalEvent)) : false;
 					this.onOpenFile(markerData.entry.file.path, newLeaf);
 				} else if (this.getSettings().multiNoteDisplay === 'spiderfy') {
-					this.spiderfyManager.show(nearby, markerData.coordinates);
+					this.spiderfyManager.show(nearby, markerData.coordinates, mapConfig?.spiderfyImageProp ?? null);
 				} else {
 					const data = this.getData();
-					const mapConfig = this.getMapConfig();
 					if (data && data.properties && mapConfig) {
 						this.popupManager.showPopup(
 							nearby,
