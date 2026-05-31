@@ -25,6 +25,7 @@ interface MapConfig {
 	coordinatesProp: BasesPropertyId | null;
 	markerIconProp: BasesPropertyId | null;
 	markerColorProp: BasesPropertyId | null;
+	spiderfyImageProp: BasesPropertyId | null;
 	mapHeight: number;
 	defaultZoom: number;
 	center: [number, number];
@@ -450,6 +451,7 @@ export class MapView extends BasesView {
 		const coordinatesProp = this.config.getAsPropertyId('coordinates');
 		const markerIconProp = this.config.getAsPropertyId('markerIcon');
 		const markerColorProp = this.config.getAsPropertyId('markerColor');
+		const spiderfyImageProp = this.config.getAsPropertyId('spiderfyImage');
 
 		// Load numeric configurations with validation
 		const minZoom = this.getNumericConfig('minZoom', 0, 0, 24);
@@ -501,6 +503,7 @@ export class MapView extends BasesView {
 			coordinatesProp,
 			markerIconProp,
 			markerColorProp,
+			spiderfyImageProp,
 			mapHeight,
 			defaultZoom,
 			center,
@@ -758,6 +761,13 @@ export class MapView extends BasesView {
 						displayName: 'Marker color',
 						type: 'property',
 						key: 'markerColor',
+						filter: prop => !prop.startsWith('file.'),
+						placeholder: 'Property',
+					},
+					{
+						displayName: 'Spiderfy image',
+						type: 'property',
+						key: 'spiderfyImage',
 						filter: prop => !prop.startsWith('file.'),
 						placeholder: 'Property',
 					},

@@ -1,4 +1,4 @@
-import { App } from 'obsidian';
+import { App, BasesEntry, BasesPropertyId, TFile } from 'obsidian';
 import { Map } from 'maplibre-gl';
 import { MapMarker } from './types';
 import { MapSettings } from '../settings';
@@ -18,6 +18,7 @@ export class SpiderfyManager {
 
 	private activeMarkers: MapMarker[] | null = null;
 	private activeCoordinates: [number, number] | null = null;
+	private activeImageProp: BasesPropertyId | null = null;
 	private armLengths: number[] = [];
 
 	private hideTimeout: number | null = null;
@@ -34,12 +35,13 @@ export class SpiderfyManager {
 		this.map = map;
 	}
 
-	show(markers: MapMarker[], coordinates: [number, number]): void {
+	show(markers: MapMarker[], coordinates: [number, number], imageProp: BasesPropertyId | null = null): void {
 		this.clearHideTimeout();
 		this.tearDown();
 
 		this.activeMarkers = markers;
 		this.activeCoordinates = coordinates;
+		this.activeImageProp = imageProp;
 
 		// SVG overlay for lines
 		const svgEl = this.svgEl = document.createElementNS(SVG_NS, 'svg') as SVGSVGElement;
@@ -57,9 +59,10 @@ export class SpiderfyManager {
 		const mapW = this.mapEl.offsetWidth || 600;
 		const mapH = this.mapEl.offsetHeight || 400;
 		const maxRadius = Math.min(mapW, mapH) * 0.38;
-		// Minimum radius so adjacent cards (≈170px wide) don't overlap at their arc chord
-		const cardW = 170;
-		const geoMin = n <= 1 ? 80 : Math.ceil((cardW / 2) / Math.sin(Math.PI / n));
+		// Minimum radius so adjacent cards don't overlap at their arc chord.
+		// cardW is wider when images are shown (~210px) vs. text-only (~170px).
+		const cardW = imageProp ? 210 : 170;
+		const geoMin = n <= 1 ? 90 : Math.ceil((cardW / 2) / Math.sin(Math.PI / n));
 		const baseRadius = Math.min(Math.max(90, geoMin), maxRadius);
 
 		for (const marker of markers) {
@@ -71,7 +74,17 @@ export class SpiderfyManager {
 
 			// Card div
 			const cardEl = cardsEl.createDiv('bases-map-spiderfy-card');
-			const title = this.getTitleText(marker);
+
+			// Thumbnail image (only when an image property is configured)
+			if (imageProp) {
+				const imgSrc = this.resolveImageSrc(marker.entry, imageProp);
+				if (imgSrc) {
+					const imgEl = cardEl.createEl('img', { cls: 'bases-map-spiderfy-card-img' });
+					imgEl.src = imgSrc;
+				}
+			}
+
+			const title = marker.entry.file.basename;
 			const linkEl = cardEl.createEl('a', { href: marker.entry.file.path, cls: 'internal-link' });
 			linkEl.textContent = title;
 
@@ -131,14 +144,15 @@ export class SpiderfyManager {
 		this.armLengths = [];
 		this.activeMarkers = null;
 		this.activeCoordinates = null;
+		this.activeImageProp = null;
 	}
 
 	private render(): void {
 		if (!this.map || !this.activeCoordinates || !this.activeMarkers) return;
 
 		const n = this.activeMarkers.length;
-		const cardHalfW = 85;
-		const cardHalfH = 16;
+		const cardHalfW = this.activeImageProp ? 105 : 85;
+		const cardHalfH = this.activeImageProp ? 20 : 16;
 		const mapW = this.mapEl.offsetWidth || 600;
 		const mapH = this.mapEl.offsetHeight || 400;
 
@@ -176,8 +190,33 @@ export class SpiderfyManager {
 		}
 	}
 
-	private getTitleText(marker: MapMarker): string {
-		// Prefer the file basename as the card label — always available and never renders as an image
-		return marker.entry.file.basename;
+	// Resolve a frontmatter property value to a displayable image URL.
+	// Handles vault-relative paths, wikilinks ([[file.jpg]]), and https:// URLs.
+	private resolveImageSrc(entry: BasesEntry, prop: BasesPropertyId): string | null {
+		let raw: unknown;
+		try {
+			const cache = this.app.metadataCache.getFileCache(entry.file);
+			raw = cache?.frontmatter?.[prop as string];
+		} catch {
+			return null;
+		}
+
+		if (!raw || typeof raw !== 'string') return null;
+
+		// Strip wikilink syntax: ![[path|alias]] → path
+		let path = raw.trim()
+			.replace(/^!?\[\[(.+?)\]\]$/, '$1')
+			.replace(/\|.*$/, '');
+
+		if (!path) return null;
+
+		// Resolve as a vault file first
+		const file: TFile | null = this.app.metadataCache.getFirstLinkpathDest(path, entry.file.path);
+		if (file) return this.app.vault.getResourcePath(file);
+
+		// Fall back to bare URL
+		if (/^https?:\/\//.test(path)) return path;
+
+		return null;
 	}
 }
